@@ -6,4 +6,4 @@ And see/hear how yours looks.
 
 
 
-<img src="pics/screenshot.png" alt="App Preview" width="400">
+<img src="pics/morseTrainer11.2.png" alt="App Preview" width="400">
