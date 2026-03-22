@@ -1,0 +1,217 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>Sane Morse V13 - Ron Lyttle Edition</title>
+    <style>
+        body { background-color: #1a2f1a; color: #e0e0e0; font-family: 'Courier New', monospace; margin: 0; display: flex; height: 100vh; overflow: hidden; }
+        #chart-sidebar { width: 380px; background: #0d1a0d; border-right: 3px solid #00ff00; padding: 20px; display: flex; flex-direction: column; }
+        .chart-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 15px; flex-grow: 1; overflow-y: auto; }
+        .chart-item { display: flex; justify-content: space-between; font-size: 1.8em; border-bottom: 1px solid #222; padding: 5px; }
+        .chart-code { color: #00ff00; font-weight: bold; letter-spacing: 3px; }
+        
+        #main-content { flex-grow: 1; padding: 20px; display: flex; flex-direction: column; gap: 15px; }
+        .panel { background: #243d24; padding: 15px; border-radius: 8px; border: 1px solid #336633; }
+        textarea { width: 100%; height: 60px; background: #0d1a0d; color: #00ff00; border: 1px solid #336633; padding: 10px; font-family: inherit; resize: none; margin-bottom: 10px; }
+        #text-tracker { background: #000; padding: 15px; border: 1px solid #00ff00; height: 80px; overflow-y: auto; font-size: 1.6em; line-height: 1.4; color: #888; white-space: pre-wrap; }
+        .past { color: #333; }
+        .current { background: #00ff00; color: #000; padding: 2px 8px; font-weight: bold; border-radius: 3px; }
+        
+        .viz-container { position: relative; height: 120px; background: #000; border: 3px solid #00ff00; overflow: hidden; }
+        #space-prompt { 
+            position: absolute; width: 100%; text-align: center; top: 40%; 
+            font-size: 2em; color: #00ff00; font-weight: bold; z-index: 20;
+            animation: pulse 2s infinite; pointer-events: none;
+        }
+        @keyframes pulse { 0% { opacity: 0.2; } 50% { opacity: 1; } 100% { opacity: 0.2; } }
+
+        .trace { position: absolute; height: 100%; right: 0; }
+        .user-trace { background: #ffcc00; bottom: 0; height: 50%; z-index: 10; box-shadow: 0 0 10px #ffcc00; }
+        .ghost-trace { background: #00ff00; top: 0; height: 50%; opacity: 0.3; z-index: 1; border-right: 2px solid #000; }
+        
+        .display-row { display: flex; justify-content: space-around; font-size: 4em; font-weight: bold; background: #0d1a0d; border: 1px solid #336633; }
+        #user-input-code { color: #ffcc00; }
+        
+        .controls { display: flex; gap: 15px; align-items: center; background: #243d24; padding: 15px; border-radius: 8px; }
+        button { padding: 10px 15px; cursor: pointer; background: #336633; color: white; border: none; border-radius: 4px; font-weight: bold; }
+        #reset-msg { color: #ff3333; font-weight: bold; visibility: hidden; }
+        
+        .copyright-footer { margin-top: 20px; text-align: center; color: #006600; font-size: 0.9em; border-top: 1px solid #1a2f1a; padding-top: 10px; }
+    </style>
+</head>
+<body>
+
+<div id="chart-sidebar">
+    <h2 style="color:#00ff00; text-align:center; border-bottom: 2px solid #00ff00; margin-top: 0;">REFERENCE</h2>
+    <div id="chart-content" class="chart-grid"></div>
+    <div class="copyright-footer">
+        &copy; Ron Lyttle 2026
+    </div>
+</div>
+
+<div id="main-content">
+    <div class="panel">
+        <textarea id="textInput" placeholder="PASTE NEW TRAINING TEXT HERE..."></textarea>
+        <div id="text-tracker"></div>
+    </div>
+    <div class="display-row">
+        <div id="target-char">-</div>
+        <div id="user-input-code"></div>
+    </div>
+    <div class="viz-container" id="viz-box">
+        <div id="space-prompt">PRESS SPACEBAR TO KEY</div>
+    </div>
+    <div class="controls">
+        <button id="setStartBtn">SET & START</button>
+        <button id="playRefBtn">PLAY REFERENCE</button>
+        <button id="stopBtn">STOP / RESET</button>
+        <div style="flex-grow:1">
+            <label>SPEED: <span id="wpmVal">12</span> WPM</label><br>
+            <input type="range" id="wpmSlider" min="5" max="35" value="12" style="width:100%">
+        </div>
+        <div id="reset-msg">RESET</div>
+        <div id="keyLight" style="width:30px; height:30px; border-radius:50%; background:#333; border: 2px solid #555;"></div>
+    </div>
+</div>
+
+<script>
+    const MORSE = {'A':'.-','B':'-...','C':'-.-.','D':'-..','E':'.','F':'..-.','G':'--.','H':'....','I':'..','J':'.---','K':'-.-','L':'.-..','M':'--','N':'-.','O':'---','P':'.--.','Q':'--.-','R':'.-.','S':'...','T':'-','U':'..-','V':'...-','W':'.--','X':'-..-','Y':'-.--','Z':'--..','1':'.----','2':'..---','3':'...--','4':'....-','5':'.....','6':'-....','7':'--...','8':'---..','9':'----.','0':'-----'};
+    const chartContent = document.getElementById('chart-content');
+    Object.keys(MORSE).sort().forEach(k => { chartContent.innerHTML += `<div class="chart-item"><span>${k}</span><span class="chart-code">${MORSE[k]}</span></div>`; });
+
+    let poem = "SPAWNED AND BESPECKLED...";
+    let currentIndex = 0;
+    let userBits = "";
+    let lastKeyTime = Date.now();
+    let isPlayingRef = false;
+    let audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+    let currentOsc = null;
+
+    const tracker = document.getElementById('text-tracker');
+    const wpmSlider = document.getElementById('wpmSlider');
+    const keyLight = document.getElementById('keyLight');
+
+    function updateUI() {
+        while (currentIndex < poem.length && !MORSE[poem[currentIndex]]) { currentIndex++; }
+        tracker.innerHTML = `<span class="past">${poem.substring(0, currentIndex)}</span><span class="current">${poem[currentIndex] || ''}</span>${poem.substring(currentIndex+1)}`;
+        document.getElementById('target-char').innerText = poem[currentIndex] || '-';
+        document.getElementById('user-input-code').innerText = userBits;
+    }
+
+    wpmSlider.oninput = () => document.getElementById('wpmVal').innerText = wpmSlider.value;
+
+    function stopTone() {
+        if (currentOsc) {
+            try { currentOsc.stop(); } catch(e) {}
+            currentOsc = null;
+        }
+    }
+
+    function startTone(vol) {
+        stopTone(); 
+        const osc = audioCtx.createOscillator();
+        const gain = audioCtx.createGain();
+        osc.frequency.value = 700;
+        osc.connect(gain);
+        gain.connect(audioCtx.destination);
+        gain.gain.setValueAtTime(vol, audioCtx.currentTime);
+        osc.start();
+        currentOsc = osc;
+    }
+
+    document.getElementById('stopBtn').onclick = () => {
+        isPlayingRef = false;
+        stopTone();
+        currentIndex = 0;
+        userBits = "";
+        updateUI();
+        document.getElementById('viz-box').innerHTML = '<div id="space-prompt">PRESS SPACEBAR TO KEY</div>';
+    };
+
+    document.getElementById('setStartBtn').onclick = () => {
+        isPlayingRef = false;
+        stopTone();
+        poem = document.getElementById('textInput').value.toUpperCase() || "PASTE TEXT TO START";
+        currentIndex = 0;
+        userBits = "";
+        updateUI();
+    };
+
+    setInterval(() => {
+        if (Date.now() - lastKeyTime > 1000 && userBits !== "" && !isKeyDown) {
+            userBits = ""; updateUI();
+            document.getElementById('reset-msg').style.visibility = "visible";
+            setTimeout(() => document.getElementById('reset-msg').style.visibility = "hidden", 500);
+        }
+    }, 100);
+
+    let isKeyDown = false, keyStart = 0;
+
+    window.onkeydown = (e) => {
+        if (e.target.id === "textInput") return;
+        if (e.code === 'Space' && !isKeyDown) {
+            e.preventDefault();
+            // Remove prompt on first use
+            const prompt = document.getElementById('space-prompt');
+            if (prompt) prompt.remove();
+
+            if (audioCtx.state === 'suspended') audioCtx.resume();
+            isKeyDown = true; keyStart = Date.now();
+            keyLight.style.background = "#00ff00";
+            startTone(0.3);
+        }
+    };
+
+    window.onkeyup = (e) => {
+        if (e.target.id === "textInput") return;
+        if (e.code === 'Space') {
+            isKeyDown = false; 
+            stopTone();
+            const dur = Date.now() - keyStart;
+            lastKeyTime = Date.now();
+            keyLight.style.background = "#333";
+            const dot = 1200 / wpmSlider.value;
+            userBits += (dur < dot * 2 ? '.' : '-');
+            spawnTrace(dur, 'user-trace', 0);
+            if (userBits === MORSE[poem[currentIndex]]) {
+                currentIndex++; userBits = "";
+                setTimeout(updateUI, 150);
+            } else { updateUI(); }
+        }
+    };
+
+    function spawnTrace(dur, className, startOffset) {
+        const div = document.createElement('div');
+        div.className = 'trace ' + className;
+        div.style.width = (dur / 4) + 'px';
+        const box = document.getElementById('viz-box');
+        if (box) box.appendChild(div);
+        let pos = -(startOffset / 4);
+        const interval = setInterval(() => {
+            pos += 5; div.style.right = pos + 'px';
+            if (pos > window.innerWidth || !div.parentElement) { clearInterval(interval); div.remove(); }
+        }, 20);
+    }
+
+    document.getElementById('playRefBtn').onclick = async () => {
+        if (isPlayingRef) return; 
+        isPlayingRef = true;
+        if (audioCtx.state === 'suspended') audioCtx.resume();
+        const dot = 1200 / wpmSlider.value;
+        const code = MORSE[poem[currentIndex]];
+        if (!code) { isPlayingRef = false; return; }
+        let offset = 0;
+        for (let s of code) {
+            if (!isPlayingRef) break; 
+            const toneDur = s === '.' ? dot : dot * 3;
+            spawnTrace(toneDur, 'ghost-trace', offset);
+            startTone(0.1);
+            await new Promise(r => setTimeout(() => { stopTone(); r(); }, toneDur));
+            await new Promise(r => setTimeout(r, dot));
+            offset += (toneDur + dot);
+        }
+        isPlayingRef = false;
+    };
+</script>
+</body>
+</html>
